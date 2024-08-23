@@ -1,0 +1,53 @@
+# Model directive for planar iiwa with simple collision and welded gripper
+
+directives:
+
+# Add box
+- add_model:
+    name: box
+    file: package://ciris_pgd/models/assets/box_small.urdf
+
+- add_frame:
+    name: box
+    X_PF:
+      base_frame: world
+      translation: [0,0,0]
+      rotation: !Rpy { deg: [0, 0, 0]}
+
+- add_weld:
+    parent: world
+    child: box::base
+
+
+# Add iiwa_left
+- add_model:
+    name: iiwa_left
+    file: package://ciris_pgd/models/assets/oneDOF_iiwa7_with_box_collision.sdf
+
+- add_frame:
+    name: iiwa_left_origin
+    X_PF:
+      base_frame: world
+      translation: [0,-1,0.55]
+      rotation: !Rpy { deg: [-90, -90, 0]}
+
+- add_weld:
+    parent: iiwa_left_origin
+    child: iiwa_left::iiwa_oneDOF_link_0
+
+# Add iiwa_right
+- add_model:
+    name: iiwa_right
+    # file: package://drake/manipulation/models/iiwa_description/urdf/iiwa14_polytope_collision.urdf
+    file: package://ciris_pgd/models/assets/oneDOF_iiwa7_with_box_collision.sdf
+
+- add_frame:
+    name: iiwa_right_origin
+    X_PF:
+      base_frame: world
+      translation: [0,1,0.85]
+      rotation: !Rpy { deg: [90, 90, 0]}
+
+- add_weld:
+    parent: iiwa_right_origin
+    child: iiwa_right::iiwa_oneDOF_link_0
