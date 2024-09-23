@@ -17,6 +17,10 @@ from pydrake.geometry.optimization import IrisOptions, HPolyhedron, Hyperellipso
 from pydrake.solvers import MosekSolver, CommonSolverOption, SolverOptions, ScsSolver
 import time
 import pickle
+import logging
+dk_log = logging.getLogger("drake")
+dk_log.setLevel(logging.DEBUG)
+dk_log.getChild("Snopt").setLevel(logging.INFO)
 
 #construct our robot
 builder = DiagramBuilder()
@@ -25,6 +29,7 @@ parser = Parser(plant)
 
 parser.package_map().Add("ciris_pgd", os.path.abspath(''))
 
+# Reminder the collision geometry is indeed cylinders and not sphere. Name wasn't changed accordingly
 directives_file = "/home/shrutigarg/drake/ciris-pgd/models/iiwa14_sphere_collision_complex_scenario.dmd.yaml"
 directives = LoadModelDirectives(directives_file)
 models = ProcessModelDirectives(directives, plant, parser)
@@ -75,30 +80,48 @@ solver_id = MosekSolver.id() if MosekSolver().available() and mosek_file_not_emp
 
 solver_id = MosekSolver.id() if MosekSolver().available() else ScsSolver.id()
 
-# load Savva's regions
-iris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/ComplexScenarioRegions.yaml")
-# Some seedpoints
-list_regions = list(iris_regions.values())
-seed_points_q = np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
-regions_to_sample = [0, 13, 18, 19]
-for reg_idx in regions_to_sample:
-    seed_q = list_regions[reg_idx].ChebyshevCenter()
-    seed_points_q = np.append(seed_points_q, [seed_q], axis=0)
+# load the generated regions
 
-seed_points = np.array([Ratfk.ComputeSValue(seed_points_q[idx], q_star)\
-                        for idx in range(seed_points_q.shape[0])])
+regions_folder = '/home/shrutigarg/drake/ciris-pgd/regions_real/'
 
-# generate C-IRIS regions with these seedpoints
-default_scale = 1e-2
-L1_ball = HPolyhedron.MakeL1Ball(7)
-Linf_ball = HPolyhedron.MakeBox(-np.ones(7), np.ones(7))
+regions_dict = dict()
+# Iterate over all files in the regions directory
+for filename in os.listdir(regions_folder):
+    regions_dict.update(LoadIrisRegionsYamlFile(f"/home/shrutigarg/drake/ciris-pgd/regions_real/{filename}"))
+    print(f'Region "{filename}" has been loaded')
 
-template_C = np.vstack([L1_ball.A(), Linf_ball.A()])
-template_d = np.hstack([default_scale*L1_ball.b(), default_scale/np.sqrt(2)*Linf_ball.b()])
+print('All regions have been loaded.')
+regions = list(regions_dict.values())
+
+# # iris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/ComplexScenarioRegions.yaml")
+# # Some seedpoints
+# list_regions = list(iris_regions.values())
+# seed_points_q = np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+# # regions_to_sample = [0, 13, 18, 19]
+# names_regions = list(iris_regions.keys())
+# names_to_save = ["origin"]
+# for reg_idx in range(len(list_regions)):
+#     if names_regions[reg_idx] == "RightBin-Above":
+#         break
+#     seed_q = list_regions[reg_idx].MaximumVolumeInscribedEllipsoid().center()
+#     print(names_regions[reg_idx])
+#     seed_points_q = np.append(seed_points_q, [seed_q], axis=0)
+#     names_to_save.append(names_regions[reg_idx])
+
+# seed_points = np.array([Ratfk.ComputeSValue(seed_points_q[idx], q_star)\
+#                         for idx in range(seed_points_q.shape[0])])
+
+# # generate C-IRIS regions with these seedpoints
+# default_scale = 1e-2
+# L1_ball = HPolyhedron.MakeL1Ball(7)
+# Linf_ball = HPolyhedron.MakeBox(-np.ones(7), np.ones(7))
+
+# template_C = np.vstack([L1_ball.A(), Linf_ball.A()])
+# template_d = np.hstack([default_scale*L1_ball.b(), default_scale/np.sqrt(2)*Linf_ball.b()])
 
 
-def make_default_polytope_at_point(seed_point):
-    return HPolyhedron(template_C, template_d + template_C @ seed_point)
+# def make_default_polytope_at_point(seed_point):
+#     return HPolyhedron(template_C, template_d + template_C @ seed_point)
 
 # colors to plot the region.
 default_alpha = 0.2
@@ -110,7 +133,7 @@ colors_dict = {
     4: Rgba(0.055, 0.914, 0.929, default_alpha), # teal 
 }
 
-initial_regions = [(make_default_polytope_at_point(s), colors_dict[i]) for i, s in enumerate(seed_points)]
+# initial_regions = [make_default_polytope_at_point(s) for i, s in enumerate(seed_points)]
 # The options for when we search for a new polytope given positivity certificates.
 find_polytope_given_lagrangian_option = CspaceFreePolytope.FindPolytopeGivenLagrangianOptions()
 find_polytope_given_lagrangian_option.solver_options = solver_options
@@ -143,42 +166,44 @@ binary_search_options.find_lagrangian_options.ignore_redundant_C = False
 binary_search_options.find_lagrangian_options.solver_id = solver_id
 # binary_search_options.find_lagrangian_options = find_separation_certificate_given_polytope_options
 
-start = time.perf_counter()
-ciris_regions = []
-ciris_ellipses = []
+# start = time.perf_counter()
+# ciris_regions = []
+# ciris_ellipses = []
 
-iris_options = IrisOptions()
-iris_options.require_sample_point_is_contained = True
-iris_options.configuration_space_margin = 1e-3
-iris_options.relative_termination_threshold = 0.001
+# iris_options = IrisOptions()
+# iris_options.require_sample_point_is_contained = True
+# iris_options.configuration_space_margin = 1e-3
+# iris_options.relative_termination_threshold = 0.001
 
-context_for_iris = context
-for i, s in enumerate(seed_points):
-    print("seed point ", i, " finished")
-    q = Ratfk.ComputeQValue(s, q_star)
-    plant.SetPositions(plant.GetMyMutableContextFromRoot(context_for_iris), q)
-    r = IrisInRationalConfigurationSpace(plant, 
-                                         plant.GetMyContextFromRoot(context_for_iris),
-                                         q_star, iris_options)
-    ciris_regions.append((r, colors_dict[i]))
-    ciris_ellipses.append(r.MaximumVolumeInscribedEllipsoid())
-end = time.perf_counter()
-print("time taken ", end-start)
+# context_for_iris = context
+# for i, s in enumerate(seed_points):
+#     start = time.perf_counter()
+#     print("seed point ", i, " started")
+#     q = Ratfk.ComputeQValue(s, q_star)
+#     plant.SetPositions(plant.GetMyMutableContextFromRoot(context_for_iris), q)
+#     r = IrisInRationalConfigurationSpace(plant, 
+#                                          plant.GetMyContextFromRoot(context_for_iris),
+#                                          q_star, iris_options)
+#     name = names_to_save[i]
+#     if r is not None:
+#         SaveIrisRegionsYamlFile(f"/home/shrutigarg/drake/ciris-pgd/regions/primitive_regions_{name}.yaml", {name: r})
+#     end = time.perf_counter()
+#     print("time taken ", end-start)
 
-ciris_regions_proc = [elem[0] for elem in ciris_regions]
-ciris_regions_proc_names = ["Origin", "AboveEverything", "RightBin-Above", "RightShelf-Front3", "RightShelf-Middle1"]
-regions_dict = dict()
-for n, r in zip(ciris_regions_proc_names, ciris_regions_proc):
-    regions_dict[n] = r
+# regions_dict = dict()
+# for n, r in zip(ciris_regions_proc_names, ciris_regions_proc):
+#     regions_dict[n] = r
 
-SaveIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions3.yaml", regions_dict)
+# SaveIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/primitive_regions.yaml", regions_dict)
 
-ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions3.yaml")
-print(ciris_regions)
+# ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions_simplercoll.yaml")
+# print(ciris_regions)
 
-binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in ciris_regions.keys()])
-for i, (name, initial_region) in enumerate(zip(ciris_regions.keys(), ciris_regions.values())):
-    print(f"starting seedpoint {i+1}/{len(ciris_regions)}")
+# regions_to_save = dict()
+binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in regions_dict.keys()])
+# # regions_dummy = [tup[0] for tup in initial_regions]
+for i, (name, initial_region) in enumerate(zip(regions_dict.keys(), regions)):
+    print(f"starting seedpoint {i+1}/{len(regions_dict)}")
     time.sleep(0.2)
     start = time.perf_counter()
     cert = cspace_free_polytope.BinarySearch(set(),
@@ -186,10 +211,12 @@ for i, (name, initial_region) in enumerate(zip(ciris_regions.keys(), ciris_regio
                                                     initial_region.b(), 
                                                     initial_region.MaximumVolumeInscribedEllipsoid().center(), 
                                                     binary_search_options)
-    binary_search_region_certificates_for_iris[name] = [(cert.certified_polytope() if cert is not None else None, cert)]
+    if cert is not None:
+        SaveIrisRegionsYamlFile(f"/home/shrutigarg/drake/ciris-pgd/simple_{name}.yaml", {name: cert.certified_polytope()})
+    else:
+        print(f"COULDN'T FIND FOR {name}")
+
     end = time.perf_counter()
     print(end-start)
-
-# Serialize the data to a file
-with open('certficates.pkl', 'wb') as file:
-    pickle.dump(binary_search_region_certificates_for_iris, file)
+    break
+breakpoint()
