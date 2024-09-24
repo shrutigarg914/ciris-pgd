@@ -44,8 +44,11 @@ def comb(n, r):
 
 def generate_flows(start, goal, order, regions, dim=8):
     # t1 = time.time()
+    continuity = 1
 
     gcs = GcsTrajectoryOptimization(dim)
+    if continuity > 0:
+        gcs.AddPathContinuityConstraints(continuity)
     if dim==8:
         try:
             wraparound = np.full(8, np.inf)
@@ -62,7 +65,7 @@ def generate_flows(start, goal, order, regions, dim=8):
 
     gcs.AddPathLengthCost()
     if dim==8:
-        gcs.AddVelocityBounds(-np.ones(8), np.ones(8))
+        gcs.AddVelocityBounds(-np.ones(dim), np.ones(dim))
 
 #     s = gcs.GetGraphvizString()
 #     plot_dot(s)
@@ -166,12 +169,12 @@ def run_dfs(flows_result, gcs, start_vertex, end_vertex, iterations=10):
         
     return best_path, best_rounded_result
 
-def trajectorify(path, result):
+def trajectorify(path, result, ndim=8):
     bezier_curves = []
     i = 0
     for vertex in path[1:-1]:
         
-        control_pts = result.GetSolution(vertex.x())[:-1].reshape((-1, 8)).T
+        control_pts = result.GetSolution(vertex.x())[:-1].reshape((-1, ndim)).T
         bezier_curves.append(BezierCurve(i, i+1, control_pts))
         i+=1
     return CompositeTrajectory(bezier_curves)
@@ -257,6 +260,7 @@ def get_gammas(x, s, s_next, ndim=2):
     x_dim = ndim*(order+1)
     x = jnp.asarray(x)
     # print(type(x[0]))
+    # print(len(x), x_dim)
     assert len(x) == x_dim
     x = x.reshape((-1, ndim))
     gamma_s = 0
@@ -269,14 +273,15 @@ def get_gammas(x, s, s_next, ndim=2):
 # If we're planning through t
 # we want to go from t to theta
 # 2 * invtan t
-q_star = np.array([1.0, 1.0])
-def true_distance_cost(x, s, s_next):
+q_star = np.array([0., 0., 0., 0., 0., 0., 0.])
+def true_distance_cost(x, s, s_next, ndim=7):
     # x are my control points :sob:
-    gamma_s, gamma_s_next = get_gammas(x, s, s_next)
+    gamma_s, gamma_s_next = get_gammas(x, s, s_next, ndim=ndim)
     full_s = 2*jnp.arctan2(gamma_s.flatten() , jnp.ones((len(gamma_s),))) + q_star
     full_s_next = 2*jnp.arctan2(gamma_s_next.flatten(), jnp.ones((len(gamma_s),))) + q_star
     # jax.debug.print("{x}", x=((- full_s + full_s_next).dot(- full_s + full_s_next)))
     # jax.debug.print("-------")
+    # print(((- full_s + full_s_next).dot(- full_s + full_s_next))**0.5)
     return ((- full_s + full_s_next).dot(- full_s + full_s_next))**0.5
 
 sampling_resolution = 10
@@ -288,7 +293,7 @@ def distance_for_vertex(x, sr=sampling_resolution, squared=True):
     for i in range(sr):
         s = 1.0/sr * i
         s_next = 1.0/sr * (i+1)
-        cost += true_distance_cost(x, s, s_next) if squared else true_distance_cost(x, s, s_next)**0.5
+        cost += true_distance_cost(x, s, s_next, ndim=7) if squared else true_distance_cost(x, s, s_next)**0.5
     return cost
 
 def get_step(values, indices, best_path, cost_func, gradient_func, step_size=0.01, backtracking=False):

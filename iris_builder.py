@@ -133,7 +133,7 @@ for joint_index in plant.GetJointIndices():
 
 iris_options = IrisOptions()
 iris_options.require_sample_point_is_contained = True
-iris_options.configuration_space_margin = 0.00001
+iris_options.configuration_space_margin = 0.0001
 iris_options.relative_termination_threshold = 0.001
 iris_options.iteration_limit = 10
 
