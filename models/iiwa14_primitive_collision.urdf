@@ -321,9 +321,7 @@
     <collision>
       <origin rpy="0 0 0" xyz="-3.533832164e-019 -0.001260393754 -0.001625199191"/>
       <geometry>
-        <!-- Note that the mesh-based collision model is intentionally being
-            used despite being in "primitive" mode. -->
-        <sphere radius="0.05585650291"/>
+        <cylinder length="0.1" radius="0.05585650291"/>
       </geometry>
     </collision>
   </link>
