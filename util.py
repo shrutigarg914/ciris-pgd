@@ -18,8 +18,12 @@ from pydrake.all import (
     MultibodyPlant,
     SceneGraph,
     MeshcatVisualizer,
-    RationalForwardKinematics
+    RationalForwardKinematics,
+    FunctionHandleTrajectory,
+    Toppra,
+    PathParameterizedTrajectory
 )
+import os
 
 def notebook_plot_connectivity(regions, plot_dot=True, plot_adj_mat=True):
     adj_mat = np.zeros((len(regions), len(regions)))
@@ -78,7 +82,6 @@ def visualize_state(q, plant, diagram, diagram_context):
     plant.SetPositions(plant_context, q)
     diagram.ForcedPublish(diagram_context)
 
-
 def lower_alpha(plant, scene_graph, alpha):
     inspector = scene_graph.model_inspector()
     for gid in inspector.GetGeometryIds(GeometrySet(inspector.GetAllGeometryIds()), Role.kIllustration):
@@ -105,6 +108,7 @@ def build_env(meshcat, directives_file, export_sg_input=False, suffix=""):
     
     parser = Parser(plant)
     
+    parser.package_map().Add("ciris_pgd", os.path.abspath(''))
     directives = LoadModelDirectives(directives_file)
     models = ProcessModelDirectives(directives, plant, parser)
 
@@ -147,3 +151,69 @@ def display_iris(build_env, meshcat, directives_file, region, count=10, alpha=0.
         plants.append(plant)
 
     return diagrams, plants
+
+def remap_and_toppra_trajectory(traj, q_to_q_full, plant, vel_limits=None, accel_limits=None, end_effector_accel_limits=None, n_grid_points=1000, vel_limit_rescale=1.0, accel_limit_rescale=0.25):
+    # path should be the output from GcsTrajectoryOptimization
+    # q_to_q_full should take in a configuration q and output q_full (both stored as numpy lists)
+
+    if vel_limits is None:
+        vel_limits = (plant.GetVelocityLowerLimits(), plant.GetVelocityUpperLimits())
+    else:
+        vel_limit_rescale = 1.0
+    if accel_limits is None:
+        accel_limits = (plant.GetAccelerationLowerLimits(), plant.GetAccelerationUpperLimits())
+    else:
+        accel_limit_rescale = 1.0
+
+    assert isinstance(vel_limits, tuple)
+    assert len(vel_limits) == 2
+    assert isinstance(accel_limits, tuple)
+    assert len(accel_limits) == 2
+
+    # Compute default grid points
+    # options = CalcGridPointsOptions(
+    #     max_err=1e-2,
+    #     max_iter=100,
+    #     max_seg_length=0.05,
+    #     min_points=100
+    # )
+    # gridpoints = Toppra.CalcGridPoints(traj, options)
+    gridpoints = np.linspace(traj.start_time(), traj.end_time(), n_grid_points)
+
+    # Add grid points at boundaries between each trajectory segment
+    n_segments = traj.get_number_of_segments()
+    new_grid_points = [traj.end_time(i) for i in range(n_segments - 1)]
+    gridpoints = np.sort(np.unique(np.append(gridpoints, new_grid_points)))
+
+    # Create FunctionHandleTrajectory
+    def remapped_traj_function(t):
+        return q_to_q_full(traj.vector_values([t]).flatten()).reshape(-1, 1)
+
+    remapped_traj = FunctionHandleTrajectory(func=remapped_traj_function,
+                                             rows=7,
+                                             cols=1,
+                                             start_time=traj.start_time(),
+                                             end_time=traj.end_time())
+
+    # Construct Toppra instance
+    toppra = Toppra(remapped_traj, plant, gridpoints)
+    toppra.AddJointVelocityLimit(vel_limits[0] * vel_limit_rescale, vel_limits[1] * vel_limit_rescale)
+    toppra.AddJointAccelerationLimit(accel_limits[0] * accel_limit_rescale, accel_limits[1] * accel_limit_rescale)
+
+    if end_effector_accel_limits is not None:
+        for model_instance_name in ["wsg_left", "wsg_right"]:
+            model_instance = plant.GetModelInstanceByName(model_instance_name)
+            body = plant.GetBodyByName("body", model_instance)
+            end_effector_frame = body.body_frame()
+            toppra.AddFrameAccelerationLimit(end_effector_frame, -end_effector_accel_limits, end_effector_accel_limits)
+
+    time_traj = toppra.SolvePathParameterization()
+    return PathParameterizedTrajectory(remapped_traj, time_traj)
+
+
+def plot_traj_end_effector_path(q_path, meshcat, IK_obj, name="path", color_rgba=(1, 0, 0, 1)):
+	points_local = np.array([IK_obj.FK(q_full[:7])[:-1,-1] for q_full in q_full_path])
+
+	pointcloud = PointCloud(len(points_local))
+	pointcloud.mutable_xyzs()[:] = points_local.T
+	meshcat.SetObject("paths/" + name, pointcloud, 0.015, rgba=Rgba(*color_rgba))
