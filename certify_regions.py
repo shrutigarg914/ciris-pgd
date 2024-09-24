@@ -134,11 +134,14 @@ binary_search_options.find_lagrangian_options.solver_id = solver_id
 
 binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in regions_dict.keys()])
 for i, (name, initial_region) in enumerate(zip(regions_dict.keys(), regions)):
-    print(f"starting seedpoint {i+1}/{len(regions_dict)}")
+    if name=='origin':
+        print("SKIPPING ORIGIN")
+        continue
     time.sleep(0.2)
     start = time.perf_counter()
     simplified_region = initial_region.ReduceInequalities()
     print(simplified_region.A().shape, initial_region.A().shape)
+    breakpoint()
     cert = cspace_free_polytope.BinarySearch(set(),
                                                     simplified_region.A(),
                                                     simplified_region.b(), 

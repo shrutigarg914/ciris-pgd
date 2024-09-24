@@ -17,6 +17,10 @@ from pydrake.geometry.optimization import IrisOptions, HPolyhedron, Hyperellipso
 from pydrake.solvers import MosekSolver, CommonSolverOption, SolverOptions, ScsSolver
 import time
 import pickle
+import logging
+dk_log = logging.getLogger("drake")
+dk_log.setLevel(logging.DEBUG)
+dk_log.getChild("Snopt").setLevel(logging.INFO)
 
 #construct our robot
 builder = DiagramBuilder()
@@ -58,6 +62,7 @@ do_viz = True
 
 # The object we will use to perform our certification.
 cspace_free_polytope = CspaceFreePolytope(plant, scene_graph, SeparatingPlaneOrder.kAffine, q_star)
+print("HI")
 
 # set up the certifier and the options for different search techniques
 solver_options = SolverOptions()
@@ -113,12 +118,12 @@ iris_options.require_sample_point_is_contained = True
 iris_options.configuration_space_margin = 1e-3
 iris_options.relative_termination_threshold = 0.001
 
-ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions2.yaml")
-print(ciris_regions)
+ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/regions/primitive_regions_RightBin.yaml")
+print(ciris_regions, flush=True)
 
 binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in ciris_regions.keys()])
 for i, (name, initial_region) in enumerate(zip(ciris_regions.keys(), ciris_regions.values())):
-    print(f"starting seedpoint {i+1}/{len(ciris_regions)}")
+    print(f"starting seedpoint {i+1}/{len(ciris_regions)}", flush=True)
     time.sleep(0.2)
     start = time.perf_counter()
     cert = cspace_free_polytope.BinarySearch(set(),
@@ -129,6 +134,8 @@ for i, (name, initial_region) in enumerate(zip(ciris_regions.keys(), ciris_regio
     binary_search_region_certificates_for_iris[name] = [(cert.certified_polytope() if cert is not None else None, cert)]
     end = time.perf_counter()
     print(end-start)
+
+breakpoint()
 
 # Serialize the data to a file
 with open('certficates.pkl', 'wb') as file:

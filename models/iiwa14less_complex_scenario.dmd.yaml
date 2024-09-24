@@ -1,22 +1,5 @@
 directives:
 
-# Add iiwa
-- add_model:
-    name: iiwa
-    file: package://ciris_pgd/models/iiwa14_primitive_collision.urdf
-    default_joint_positions:
-        iiwa_joint_1: [0]
-        iiwa_joint_2: [0.3]
-        iiwa_joint_3: [0]
-        iiwa_joint_4: [-1.8]
-        iiwa_joint_5: [0]
-        iiwa_joint_6: [1]
-        iiwa_joint_7: [1.57]
-
-- add_weld:
-    parent: world
-    child: iiwa::base
-
 # Add bins
 - add_model:
     name: binR
