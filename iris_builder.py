@@ -67,14 +67,16 @@ def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, col
 
         xyzs = []  # List to hold XYZ positions of configurations in the IRIS region
 
-        q_sample = region.UniformSample(rng)
+        rq_sample = region.UniformSample(rng)
+        q_sample = Ratfk.ComputeQValue(rq_sample, q_star)
 
         plant.SetPositions(plant_context, q_sample)
         xyzs.append(plant.CalcRelativeTransform(plant_context, frame_A=world_frame, frame_B=ee_frame).translation())
 
         for _ in range(num_sample-1):
-            prev_sample = q_sample
-            q_sample = region.UniformSample(rng, prev_sample)
+            prev_sample = rq_sample
+            rq_sample = region.UniformSample(rng, prev_sample)
+            q_sample = Ratfk.ComputeQValue(rq_sample, q_star)
 
             plant.SetPositions(plant_context, q_sample)
             xyzs.append(plant.CalcRelativeTransform(plant_context, frame_A=world_frame, frame_B=ee_frame).translation())
@@ -92,7 +94,7 @@ parser = Parser(plant)
 
 parser.package_map().Add("ciris_pgd", os.path.abspath(''))
 
-directives_file = "/home/sgrg/rlg/SUPERUROP/ciris/models/iiwa14_sphere_collision_complex_scenario.dmd.yaml"
+directives_file = "/home/sgrg/rlg/SUPERUROP/ciris/models/iiwa14_cyl_collision_bins.dmd.yaml"
 directives = LoadModelDirectives(directives_file)
 models = ProcessModelDirectives(directives, plant, parser)
 plant.Finalize()
@@ -151,10 +153,9 @@ def in_collision(plant, scene_graph, context, print_collisions=False, thresh=1e-
                   inspector.GetName(inspector.GetFrameId(pair[1])))
     return np.min(dists) < thresh
 
-def grow_region(seed):
-    name = str(seed)    
+def grow_region(q):
+    name = str(q)    
     t1 = time.time()
-    q = Ratfk.ComputeQValue(seed, q_star)
     plant.SetPositions(plant.GetMyMutableContextFromRoot(context), q)
     r = IrisInRationalConfigurationSpace(plant, 
                                          plant.GetMyContextFromRoot(context),
@@ -168,13 +169,17 @@ meshcat.AddButton("Stop")
 meshcat.AddButton("Plot Connectivity")
 meshcat.AddButton("Grow IRIS Region")
 meshcat.AddButton("Plot Region")
-meshcat.AddButton("Add Seed and Region")
+meshcat.AddButton("Pdb")
 q = q0
+simple_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/connected_regions.yaml")
+simple_regions = list(simple_dict.values())
 regions = []
-num_clicks_iris, num_clicks_connectivity = 0, 0
+iris_options.configuration_obstacles = [r.Scale(0.8) for r in simple_regions]
+num_clicks_iris, num_clicks_connectivity, num_clicks_pdb = 0, 0, 0
 print("Ready to generate regions")
 
 while meshcat.GetButtonClicks("Stop") < 1:
+    # breakpoint()
     for i in range(len(q)):
         q[i] = meshcat.GetSliderValue(f"iiwa_joint_{i+1}")
     plant_context = plant.GetMyContextFromRoot(context)
@@ -189,13 +194,19 @@ while meshcat.GetButtonClicks("Stop") < 1:
         except:
             pass
         grow = True
+    
+    if meshcat.GetButtonClicks("Pdb") > num_clicks_pdb:
+        num_clicks_pdb = meshcat.GetButtonClicks("Pdb")
+        breakpoint()
 
     if meshcat.GetButtonClicks("Grow IRIS Region") > num_clicks_iris and grow:
         num_clicks_iris = meshcat.GetButtonClicks("Grow IRIS Region")
         region = grow_region(q)
         visualise_IRIS([region], plant, plant_context)
+        simple_region = region.SimplifyByIncrementalFaceTranslation()
         regions.append(region)
         breakpoint() # Can remove to generate new regions
+        # SaveIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/simple_regions.yaml", simple_dict)
 
     if meshcat.GetButtonClicks("Plot Connectivity") > num_clicks_connectivity:
         num_clicks_connectivity = meshcat.GetButtonClicks("Plot Connectivity")

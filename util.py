@@ -21,7 +21,9 @@ from pydrake.all import (
     RationalForwardKinematics,
     FunctionHandleTrajectory,
     Toppra,
-    PathParameterizedTrajectory
+    PathParameterizedTrajectory,
+    PointCloud,
+    Rgba
 )
 import os
 
@@ -41,8 +43,9 @@ def notebook_plot_connectivity(regions, plot_dot=True, plot_adj_mat=True):
     if plot_adj_mat:
         plt.imshow(adj_mat)
         plt.show()
-    count, _ = scipy.sparse.csgraph.connected_components(adj_mat)
-    print("Graph has %d connected components." % count)
+    count, labels = scipy.sparse.csgraph.connected_components(adj_mat)
+    print("Graph has %d connected components HI. " % count)
+    return labels
 
 def in_collision(plant, scene_graph, context, print_collisions=False, thresh=1e-12):
     plant_context = plant.GetMyContextFromRoot(context)
@@ -152,7 +155,7 @@ def display_iris(build_env, meshcat, directives_file, region, count=10, alpha=0.
 
     return diagrams, plants
 
-def remap_and_toppra_trajectory(traj, q_to_q_full, plant, vel_limits=None, accel_limits=None, end_effector_accel_limits=None, n_grid_points=1000, vel_limit_rescale=1.0, accel_limit_rescale=0.25):
+def remap_and_toppra_trajectory(traj, q_to_q_full, plant, vel_limits=None, accel_limits=None, end_effector_accel_limits=None, n_grid_points=1000, vel_limit_rescale=1.0, accel_limit_rescale=0.25, ndim=7):
     # path should be the output from GcsTrajectoryOptimization
     # q_to_q_full should take in a configuration q and output q_full (both stored as numpy lists)
 
@@ -190,7 +193,7 @@ def remap_and_toppra_trajectory(traj, q_to_q_full, plant, vel_limits=None, accel
         return q_to_q_full(traj.vector_values([t]).flatten()).reshape(-1, 1)
 
     remapped_traj = FunctionHandleTrajectory(func=remapped_traj_function,
-                                             rows=7,
+                                             rows=ndim,
                                              cols=1,
                                              start_time=traj.start_time(),
                                              end_time=traj.end_time())
@@ -212,7 +215,7 @@ def remap_and_toppra_trajectory(traj, q_to_q_full, plant, vel_limits=None, accel
 
 
 def plot_traj_end_effector_path(q_path, meshcat, IK_obj, name="path", color_rgba=(1, 0, 0, 1)):
-	points_local = np.array([IK_obj.FK(q_full[:7])[:-1,-1] for q_full in q_full_path])
+	points_local = np.array([IK_obj.FK(q[:7])[:-1,-1] for q in q_path])
 
 	pointcloud = PointCloud(len(points_local))
 	pointcloud.mutable_xyzs()[:] = points_local.T

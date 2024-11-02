@@ -26,7 +26,7 @@ from pydrake.all import GcsTrajectoryOptimization, GraphOfConvexSetsOptions, Poi
 # from src.pgd import *
 import random as rand
 
-order = 3
+order = 5
 # FK_fun = lambda q : generic_fk_fun(q, analytic_ik, 0.5, np.array([0, -0.765, 0]))
 # analytic_ik = Analytic_IK_7DoF(iiwa_alpha, iiwa_d, iiwa_limits_lower, iiwa_limits_upper)
 ndim = 8
@@ -71,9 +71,9 @@ def generate_flows(start, goal, order, regions, dim=8):
 #     plot_dot(s)
 
     options = GraphOfConvexSetsOptions()
-    options.max_rounding_trials = 1000
+    options.max_rounding_trials = 100
     options.max_rounded_paths = 100
-    options.convex_relaxation = True
+    options.convex_relaxation = False
 
     _, result = gcs.SolvePath(start_graph, goal_graph, options)
 
@@ -86,12 +86,12 @@ def generate_flows(start, goal, order, regions, dim=8):
 
 def prune(gcs, flows_result, epsilon=0.00001):
     # first we prune the edges and vertices
-    for e in gcs.graph_of_convex_sets().Edges():
-        if flows_result.GetSolution(e.phi()) < epsilon:
-            gcs.graph_of_convex_sets().RemoveEdge(e)
-    for v in gcs.graph_of_convex_sets().Vertices():
-        if (len(v.incoming_edges()) + len(v.outgoing_edges())) <= 0:
-            gcs.graph_of_convex_sets().RemoveVertex(v)
+    # for e in gcs.graph_of_convex_sets().Edges():
+    #     if flows_result.GetSolution(e.phi()) < epsilon:
+    #         gcs.graph_of_convex_sets().RemoveEdge(e)
+    # for v in gcs.graph_of_convex_sets().Vertices():
+    #     if (len(v.incoming_edges()) + len(v.outgoing_edges())) <= 0:
+    #         gcs.graph_of_convex_sets().RemoveVertex(v)
     # find the start and end vertices
     for v in gcs.graph_of_convex_sets().Vertices():
         # these names should still hold as there is one region in both start and goal regions
@@ -112,19 +112,20 @@ def run_dfs(flows_result, gcs, start_vertex, end_vertex, iterations=10):
     discarded_edges = set()
     best_path = []
     for i in range(iterations):
-    #     print(f"ITERtATION {i}")
+        # print(f"ITERATION {i}")
         current_vertex = start_vertex
         current_path = []
         current_path_vertices = [start_vertex]
         visited_nodes = set([start_vertex])
         # stop when we're at goal region currently called so.
         while current_vertex.name() != "Subgraph2: Region0":
+            # print(current_vertex.name())
 
             edges = []
             for e in current_vertex.outgoing_edges():
                 if e.v() not in visited_nodes:
                     edges.append(e)
-    #         print(current_vertex.name(), [e.v().name() for e in edges])
+            # print(current_vertex.name(), [e.v().name() for e in edges])
 
             if len(edges) == 0:
                 # if no path forward, we backtrack
@@ -144,8 +145,9 @@ def run_dfs(flows_result, gcs, start_vertex, end_vertex, iterations=10):
                 # we've multiple paths and need to choose
                 e_c = [flows_result.GetSolution(e.phi()) for e in edges]
                 edge_sample = rand.uniform(0, 1) * sum(e_c)
+                # print(e_c, edge_sample)
                 for i in range(len(e_c)):
-                    if e_c[i] <= edge_sample:
+                    if e_c[i] < edge_sample:
                         edge_sample -= e_c[i]
                     else:
                         current_path.append(edges[i])
@@ -157,13 +159,14 @@ def run_dfs(flows_result, gcs, start_vertex, end_vertex, iterations=10):
             best_path = current_path_vertices
 
         rounded_result = GraphOfConvexSets.SolveConvexRestriction(gcs.graph_of_convex_sets(), current_path, GraphOfConvexSetsOptions())
-
+        print(rounded_result.is_success())
         if rounded_result.is_success() and ((best_rounded_result is None) or best_rounded_result.get_optimal_cost() > rounded_result.get_optimal_cost()):
+            print("found a successful path?")
             best_rounded_result = rounded_result
             best_path = current_path_vertices
     #         print("BETTER PATH FOUND : ", [c.name() for c in best_path])
-
-    print("Cost for best path found  ", best_rounded_result.get_optimal_cost())
+    if best_rounded_result:
+        print("Cost for best path found  ", best_rounded_result.get_optimal_cost())
 #     for v in best_path:
 #         print(v.name())
         
@@ -273,7 +276,7 @@ def get_gammas(x, s, s_next, ndim=2):
 # If we're planning through t
 # we want to go from t to theta
 # 2 * invtan t
-q_star = np.array([0., 0., 0., 0., 0., 0., 0.])
+q_star = np.array([0., 0., 0.])
 def true_distance_cost(x, s, s_next, ndim=7):
     # x are my control points :sob:
     gamma_s, gamma_s_next = get_gammas(x, s, s_next, ndim=ndim)
@@ -293,7 +296,7 @@ def distance_for_vertex(x, sr=sampling_resolution, squared=True):
     for i in range(sr):
         s = 1.0/sr * i
         s_next = 1.0/sr * (i+1)
-        cost += true_distance_cost(x, s, s_next, ndim=7) if squared else true_distance_cost(x, s, s_next)**0.5
+        cost += true_distance_cost(x, s, s_next, ndim=3) if squared else true_distance_cost(x, s, s_next)**0.5
     return cost
 
 def get_step(values, indices, best_path, cost_func, gradient_func, step_size=0.01, backtracking=False):
@@ -425,22 +428,20 @@ def trajectorify_given_vars(path, init_vals, indices, ndim=8):
         i+=1
     return CompositeTrajectory(bezier_curves)
 
-def generate_variable_list(best_path, ndim=8):
+def generate_variable_list(best_path, ndim=8, order=order):
     # ndim = dim
     variables = [x for x in best_path[1].x()[:ndim]]
-    # print(len(best_path[1].x()[:8]))    
     indices = []
     h_list = []
     # list of functions with inputs being the variables
     for i in range(len(best_path[1:-1])):
         start_index = i*(order)*ndim # i = 1, si= 24, i = 2, si = 48
-        end_index = ((i+1) *order+1) * ndim # i = 0, ei = 32 ; i = 1, ei = (2 * 3 + 1) * 8 = 56
+        end_index = ((i+1) * order+1) * ndim # i = 0, ei = 32 ; i = 1, ei = (2 * 3 + 1) * 8 = 56
         indices.append((start_index, end_index))
         v_i = best_path[i+1]
         # print(len(v_i.x()[8:-1]))
         h_list.append(v_i.x()[-1])
         variables.extend(v_i.x()[ndim:-1])# the last variable is the time scaling
-#     print()
     assert len(variables) == ndim * (1 + order * len(best_path[1:-1]))
     return variables, indices, h_list
 
