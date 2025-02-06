@@ -11,7 +11,10 @@ from time import perf_counter
 
 from pydrake.all import (
     MathematicalProgram,
-    Solve
+    Solve,
+    SolverOptions,
+    CommonSolverOption,
+    MosekSolver
 )
 
 from pydrake.trajectories import BezierCurve, CompositeTrajectory
@@ -29,8 +32,8 @@ import random as rand
 order = 5
 # FK_fun = lambda q : generic_fk_fun(q, analytic_ik, 0.5, np.array([0, -0.765, 0]))
 # analytic_ik = Analytic_IK_7DoF(iiwa_alpha, iiwa_d, iiwa_limits_lower, iiwa_limits_upper)
-ndim = 8
-
+ndim = 7
+rand.seed(42)
 def comb(n, r):
     # n factorial / r factorial * n - r factorial
     # same as n * ... * n - r + 1 / r * .... * 1
@@ -44,54 +47,52 @@ def comb(n, r):
 
 def generate_flows(start, goal, order, regions, dim=8):
     # t1 = time.time()
-    continuity = 1
+    continuity = 2
+    print(order, dim)
 
     gcs = GcsTrajectoryOptimization(dim)
-    if continuity > 0:
-        gcs.AddPathContinuityConstraints(continuity)
-    if dim==8:
-        try:
-            wraparound = np.full(8, np.inf)
-            wraparound[-1] = 2*np.pi
-            main_graph = gcs.AddRegions(regions, order, h_min=0.1, h_max=100, name="", wraparound=wraparound)
-        except:
-            main_graph = gcs.AddRegions(regions, order, h_min=0.1, h_max=100, name="")
-    else:
-        main_graph = gcs.AddRegions(regions, order, h_min=0.1, h_max=100, name="")
+    gcs.AddPathContinuityConstraints(continuity)
+    main_graph = gcs.AddRegions(regions, order, h_min=0.001, h_max=1000, name="")
     start_graph = gcs.AddRegions([Point(start)], 0)
     goal_graph = gcs.AddRegions([Point(goal)], 0)
     gcs.AddEdges(start_graph, main_graph)
     gcs.AddEdges(main_graph, goal_graph)
 
+    # gcs.AddTimeCost()
     gcs.AddPathLengthCost()
-    if dim==8:
-        gcs.AddVelocityBounds(-np.ones(dim), np.ones(dim))
-
-#     s = gcs.GetGraphvizString()
-#     plot_dot(s)
+    # gcs.AddPathEnergyCost()
+    gcs.AddVelocityBounds(-np.ones(dim), np.ones(dim))
+    solver_options = SolverOptions()
+    solver_options.SetOption(CommonSolverOption.kPrintFileName, "debug.txt")
+    solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_INTPNT_CO_TOL_REL_GAP", 1e-3)
+    solver_options.SetOption(MosekSolver.id(), "MSK_IPAR_INTPNT_SOLVE_FORM", 1)
+    solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_MIO_TOL_REL_GAP", 1e-3)
+    solver_options.SetOption(MosekSolver.id(), "MSK_DPAR_MIO_MAX_TIME", 3600.0)
 
     options = GraphOfConvexSetsOptions()
-    options.max_rounding_trials = 100
+    options.max_rounding_trials = 1000
     options.max_rounded_paths = 100
     options.convex_relaxation = False
+    options.solver_options = solver_options
 
     _, result = gcs.SolvePath(start_graph, goal_graph, options)
 
-#     s = gcs.GetGraphvizString(result, show_slack=False)
-#     plot_dot(s)
-
-    # t2 = time.time()
+    if not result.is_success():
+        print("[WARNING] CHECK MOSEK LOGS")
     
     return gcs, result
 
 def prune(gcs, flows_result, epsilon=0.00001):
     # first we prune the edges and vertices
-    # for e in gcs.graph_of_convex_sets().Edges():
-    #     if flows_result.GetSolution(e.phi()) < epsilon:
-    #         gcs.graph_of_convex_sets().RemoveEdge(e)
-    # for v in gcs.graph_of_convex_sets().Vertices():
-    #     if (len(v.incoming_edges()) + len(v.outgoing_edges())) <= 0:
-    #         gcs.graph_of_convex_sets().RemoveVertex(v)
+    for e in gcs.graph_of_convex_sets().Edges():
+        # print(flows_result.GetSolution(e.phi()))
+        if flows_result.GetSolution(e.phi()) < epsilon:
+            gcs.graph_of_convex_sets().RemoveEdge(e)
+    for v in gcs.graph_of_convex_sets().Vertices():
+        if (len(v.incoming_edges()) + len(v.outgoing_edges())) <= 0:
+            gcs.graph_of_convex_sets().RemoveVertex(v)
+        # else:
+        #     print(v.name())
     # find the start and end vertices
     for v in gcs.graph_of_convex_sets().Vertices():
         # these names should still hold as there is one region in both start and goal regions
@@ -157,6 +158,8 @@ def run_dfs(flows_result, gcs, start_vertex, end_vertex, iterations=10):
 
         if len(best_path) == 0:
             best_path = current_path_vertices
+        
+        # print([v.name() for v in current_path_vertices], current_path)
 
         rounded_result = GraphOfConvexSets.SolveConvexRestriction(gcs.graph_of_convex_sets(), current_path, GraphOfConvexSetsOptions())
         print(rounded_result.is_success())
@@ -196,7 +199,7 @@ def prog_with_constraints(variables, best_path, start, goal, indices, ndim = 8, 
         h_vars = []
 
     # # vertex number
-    j = 0 
+    j = 1
     # # exclude the start and end pt
     for i in range(len(best_path[1:-1])):
         v_i = best_path[i+1]
@@ -215,10 +218,13 @@ def prog_with_constraints(variables, best_path, start, goal, indices, ndim = 8, 
     #     the end point constraint is added outside the loop so we don't need to skip it here
     # DOUBLE CHECK THE INDICES HERE
         pivot = indices[i][1]
-        # if j!=0 and j!=len(best_path[1:-1])-1:
-        #     x_dot_d = order * (np.asarray(v[pivot-ndim:pivot]) - v[pivot-ndim*2:pivot-ndim])
-        #     x_dot_0 = order * (np.asarray(v[pivot:pivot+ndim]) - v[pivot-ndim:pivot] )
-        #     qp.AddLinearEqualityConstraint(x_dot_0-x_dot_d, np.zeros((ndim, 1)))
+        if j!=0 and j!=len(best_path[1:-1]):
+            # print("ADDING CONTINUITY CONSTRAINTS", j, i, pivot, len(v))
+            x_dot_d = order * (np.asarray(v[pivot-ndim:pivot]) - v[pivot-ndim*2:pivot-ndim])
+            x_dot_0 = order * (np.asarray(v[pivot:pivot+ndim]) - v[pivot-ndim:pivot] )
+            # x_dot_d = order * (np.asarray(v[pivot:pivot+ndim]) - v[pivot-ndim:pivot])
+            # x_dot_0 = order * (np.asarray(v[pivot+ndim:pivot+ndim*2]) - v[pivot:pivot+ndim] )
+            qp.AddLinearEqualityConstraint(x_dot_0-x_dot_d, np.zeros((ndim, 1)))
 
         j+=1
     if h_list is None:
@@ -262,8 +268,9 @@ def run_qp_proj(variables, init_values, best_path, start, goal, indices, h_vars=
 def get_gammas(x, s, s_next, ndim=2):
     x_dim = ndim*(order+1)
     x = jnp.asarray(x)
+    # jax.debug.print("LOOKING FOR {x} getting {y}", x=x_dim, y=len(x))
     # print(type(x[0]))
-    # print(len(x), x_dim)
+    # print(len(x), ndim, order)
     assert len(x) == x_dim
     x = x.reshape((-1, ndim))
     gamma_s = 0
@@ -276,7 +283,8 @@ def get_gammas(x, s, s_next, ndim=2):
 # If we're planning through t
 # we want to go from t to theta
 # 2 * invtan t
-q_star = np.array([0., 0., 0.])
+# q_star = np.array([0., 0., 0.])
+q_star = np.array([0., 0., 0., 0., 0., 0., 0.])
 def true_distance_cost(x, s, s_next, ndim=7):
     # x are my control points :sob:
     gamma_s, gamma_s_next = get_gammas(x, s, s_next, ndim=ndim)
@@ -296,7 +304,7 @@ def distance_for_vertex(x, sr=sampling_resolution, squared=True):
     for i in range(sr):
         s = 1.0/sr * i
         s_next = 1.0/sr * (i+1)
-        cost += true_distance_cost(x, s, s_next, ndim=3) if squared else true_distance_cost(x, s, s_next)**0.5
+        cost += true_distance_cost(x, s, s_next, ndim=ndim) if squared else true_distance_cost(x, s, s_next)**0.5
     return cost
 
 def get_step(values, indices, best_path, cost_func, gradient_func, step_size=0.01, backtracking=False):
@@ -451,7 +459,7 @@ def get_equality_matrices(prog):
     A_eq = []#np.zeros((len(equalities), row_size))
     b_eq = []
     # print(row_size)
-#     print()
+    # print()
 
     for equality in equalities:
         indices = prog.FindDecisionVariableIndices(equality.variables())
@@ -474,7 +482,7 @@ def generate_samples(regions, number_samples=100):
     sample_pts = []
     for region in regions:
         samples = []
-        generator = RandomGenerator()
+        generator = RandomGenerator(42)
         sample = region.ChebyshevCenter()
         for i in range(6):
             sample = region.UniformSample(generator, sample)

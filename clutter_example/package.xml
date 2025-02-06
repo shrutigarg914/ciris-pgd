@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>ciris_pgd</name>
+  <version>0.0.0</version>
+  <description>
+    Resources for C-IRIS PGD.
+  </description>
+  <maintainer email="sgrg@mit.edu">Shruti Garg</maintainer>
+  <author>Shruti Garg</author>
+  <license>N/A</license>
+</package>

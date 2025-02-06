@@ -164,6 +164,14 @@ iris_options.configuration_space_margin = 0.0001
 iris_options.relative_termination_threshold = 0.001
 iris_options.iteration_limit = 10
 
+simple_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/1028/certified_regions_3.yaml")
+regions = [r for r in simple_dict.keys()]
+mpt = simple_dict['middle_1j'].ChebyshevCenter()
+outpt = simple_dict['top2botj'].ChebyshevCenter()
+
+initial_box = HPolyhedron.MakeBox(np.minimum(mpt, outpt), np.maximum(mpt, outpt))
+
+
 def in_collision(plant, scene_graph, context, print_collisions=False, thresh=1e-3):
     plant_context = plant.GetMyContextFromRoot(context)
     sg_context = scene_graph.GetMyContextFromRoot(context)
@@ -200,7 +208,7 @@ regions = []
 # iris_options.configuration_obstacles = []#[r.Scale(0.8) for r in simple_regions]
 num_clicks_iris, num_clicks_connectivity, num_clicks_pdb = 0, 0, 0
 print("Ready to generate regions")
-
+breakpoint()
 while meshcat.GetButtonClicks("Stop") < 1:
     # breakpoint()
     for i in range(3):
@@ -234,7 +242,6 @@ while meshcat.GetButtonClicks("Stop") < 1:
         simple_region = region.SimplifyByIncrementalFaceTranslation()
         regions.append(region)
         breakpoint() # Can remove to generate new regions
-        # SaveIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/simple_regions.yaml", simple_dict)
 
     if meshcat.GetButtonClicks("Plot Connectivity") > num_clicks_connectivity:
         num_clicks_connectivity = meshcat.GetButtonClicks("Plot Connectivity")

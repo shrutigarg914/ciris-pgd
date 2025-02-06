@@ -251,10 +251,18 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="-0.3 0 0" xyz="0 0.03 0.13"/>
+      <origin rpy="0 0 0" xyz="3.178830537e-017 0.0445161559 0.2150550559"/>
       <geometry>
-        <cylinder length="0.29" radius="0.07"/>
+        <sphere radius="0.05281876964"/>
       </geometry>
+      <material name="Grey"/>
+    </collision>
+    <collision>
+      <origin rpy="0 0 0" xyz="3.716540503e-018 9.478746123e-005 0.0302530688"/>
+      <geometry>
+        <sphere radius="0.06644602201"/>
+      </geometry>
+      <material name="Grey"/>
     </collision>
   </link>
   <!-- joint between link_5 and link_6 -->
@@ -287,12 +295,11 @@
       </geometry>
     </visual>
     <collision>
-      <origin rpy="0 1.5 1.5" xyz="0 0 0"/>
+      <origin rpy="0 0 0" xyz="-2.904627567e-018 -0.01623589495 0.00748218906"/>
       <geometry>
-        <!-- Note that the mesh-based collision model is intentionally being
-            used despite being in "primitive" mode. -->
-        <cylinder length="0.19" radius="0.075"/>
+        <sphere radius="0.06341754633"/>
       </geometry>
+      <material name="Orange"/>
     </collision>
   </link>
   <!-- joint between link_6 and link_7 -->
@@ -341,7 +348,6 @@
   <link name="iiwa_link_ee">
     </link>
   <frame link="iiwa_link_ee" name="iiwa_frame_ee" rpy="3.141592653589793 0 1.570796326794897" xyz="0.09 0 0"/>
-  <frame link="iiwa_link_ee" name="iiwa_frame_ee_viz" rpy="3.141592653589793 0 1.570796326794897" xyz="0.0 0 0"/>
   <drake:collision_filter_group name="iiwa_wrist">
     <drake:member link="iiwa_link_5"/>
     <drake:member link="iiwa_link_6"/>

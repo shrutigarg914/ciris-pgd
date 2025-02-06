@@ -39,6 +39,7 @@ dk_log = logging.getLogger("drake")
 dk_log.setLevel(logging.DEBUG)
 dk_log.getChild("Snopt").setLevel(logging.INFO)
 
+
 def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, colors=None):       
     world_frame = plant.world_frame()
     ee_frame = plant.GetFrameByName("iiwa_frame_ee")
@@ -173,35 +174,6 @@ for filename in os.listdir(regions_folder):
 print('All regions have been loaded.')
 regions = list(regions_dict.values())
 # breakpoint()
-# # iris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/ComplexScenarioRegions.yaml")
-# # Some seedpoints
-# list_regions = list(iris_regions.values())
-# seed_points_q = np.array([[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
-# # regions_to_sample = [0, 13, 18, 19]
-# names_regions = list(iris_regions.keys())
-# names_to_save = ["origin"]
-# for reg_idx in range(len(list_regions)):
-#     if names_regions[reg_idx] == "RightBin-Above":
-#         break
-#     seed_q = list_regions[reg_idx].MaximumVolumeInscribedEllipsoid().center()
-#     print(names_regions[reg_idx])
-#     seed_points_q = np.append(seed_points_q, [seed_q], axis=0)
-#     names_to_save.append(names_regions[reg_idx])
-
-# seed_points = np.array([Ratfk.ComputeSValue(seed_points_q[idx], q_star)\
-#                         for idx in range(seed_points_q.shape[0])])
-
-# # generate C-IRIS regions with these seedpoints
-# default_scale = 1e-2
-# L1_ball = HPolyhedron.MakeL1Ball(7)
-# Linf_ball = HPolyhedron.MakeBox(-np.ones(7), np.ones(7))
-
-# template_C = np.vstack([L1_ball.A(), Linf_ball.A()])
-# template_d = np.hstack([default_scale*L1_ball.b(), default_scale/np.sqrt(2)*Linf_ball.b()])
-
-
-# def make_default_polytope_at_point(seed_point):
-#     return HPolyhedron(template_C, template_d + template_C @ seed_point)
 
 # colors to plot the region.
 default_alpha = 0.2
@@ -246,72 +218,130 @@ binary_search_options.find_lagrangian_options.ignore_redundant_C = False
 binary_search_options.find_lagrangian_options.solver_id = solver_id
 # binary_search_options.find_lagrangian_options = find_separation_certificate_given_polytope_options
 
-# start = time.perf_counter()
-# ciris_regions = []
-# ciris_ellipses = []
 
-# iris_options = IrisOptions()
-# iris_options.require_sample_point_is_contained = True
-# iris_options.configuration_space_margin = 1e-3
-# iris_options.relative_termination_threshold = 0.001
+simple_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/1028/certified_regions_3.yaml")
+regions = [r for r in simple_dict.keys()]
+# breakpoint()
+mpt = simple_dict['crankyj'].ChebyshevCenter()
+outpt = simple_dict['middle_1j'].ChebyshevCenter()
 
-# context_for_iris = context
-# for i, s in enumerate(seed_points):
-#     start = time.perf_counter()
-#     print("seed point ", i, " started")
-#     q = Ratfk.ComputeQValue(s, q_star)
-#     plant.SetPositions(plant.GetMyMutableContextFromRoot(context_for_iris), q)
-#     r = IrisInRationalConfigurationSpace(plant, 
-#                                          plant.GetMyContextFromRoot(context_for_iris),
-#                                          q_star, iris_options)
-#     name = names_to_save[i]
-#     if r is not None:
-#         SaveIrisRegionsYamlFile(f"/home/shrutigarg/drake/ciris-pgd/regions/primitive_regions_{name}.yaml", {name: r})
-#     end = time.perf_counter()
-#     print("time taken ", end-start)
+a = simple_dict['crankyj'].ChebyshevCenter()
+b = simple_dict['middle_1j'].ChebyshevCenter()
+mdpt = np.linspace(a, b, 3)[1]
+dv = b - a
+prog = MathematicalProgram()
+n1 = prog.NewContinuousVariables(3)
+n2 = prog.NewContinuousVariables(3)
+prog.AddConstraint(n1.dot(n1)>= 0.01)
+prog.AddConstraint(n2.dot(n2)>= 0.01)
 
-# regions_dict = dict()
-# for n, r in zip(ciris_regions_proc_names, ciris_regions_proc):
-#     regions_dict[n] = r
+prog.AddConstraint(n1.dot(n2), 0, 0)
+prog.AddConstraint(dv.dot(n2), 0, 0)
+prog.AddConstraint(dv.dot(n1), 0, 0)
+prog.SetInitialGuess(n1, dv)
+prog.SetInitialGuess(n2, dv)
+result = Solve(prog)
+print(result.is_success())
+norm1 = result.GetSolution(n1)
+norm2 = result.GetSolution(n2)
+norm1.dot(norm2)
+un2 = norm2/np.linalg.norm(norm2)
+un1 = norm1/np.linalg.norm(norm1)
 
-# SaveIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/primitive_regions.yaml", regions_dict)
+A = [
+    un1,
+    -un1,
+    un2,
+    -un2,
+    [1, 0, 0],
+    [-1, 0, 0],
+    [0, 1, 0],
+    [0, -1, 0],
+    [0, 0, 1],
+    [0, 0, -1],
+]
+max_endpt = np.maximum(a, b)
+min_endpt = np.minimum(a, b)
+eps = 0.01
+b = [
+    - un1.dot(-mdpt) + eps,
+    un1.dot(-mdpt) + eps,
+    - un2.dot(-mdpt) + eps,
+    un2.dot(-mdpt) + eps,
+    max_endpt[0],
+    -min_endpt[0],
+    max_endpt[1],
+    -min_endpt[1],
+    max_endpt[2],
+    -min_endpt[2]
+]
 
-# ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions_simplercoll.yaml")
-# print(ciris_regions)
-q_low = np.array([-3.094395,-3.094395,-3.094395])
-q_high = np.array([3.094395,3.094395,3.094395])
-print("LOWER ", Ratfk.ComputeSValue([ 0.53982789, -1.20966412, -0.28214862], q_star))
-print("HIGHER ", Ratfk.ComputeSValue([3.094395,3.094395,3.094395], q_star))
-# regions_to_save = dict()
 breakpoint()
-binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in regions_dict.keys()])
-# # regions_dummy = [tup[0] for tup in initial_regions]
-certified_regions = {}
-for i, (name, initial_region) in enumerate(zip(regions_dict.keys(), regions)):
-    print("NAME", name)
-    # initial_region = initial_region.Scale(0.9)
-    print(f"starting seedpoint {i+1}/{len(regions_dict)}")
-    start = time.perf_counter()
-    print(initial_region.MaximumVolumeInscribedEllipsoid().center())
-    s_center = initial_region.MaximumVolumeInscribedEllipsoid().center()#[ 0.53982789, -1.20966412, -0.28214862]
-    # if i ==1 or i==5 or i==9:
-        # visualise_IRIS([initial_region], plant, plant_context)
-        # breakpoint()
-        # continue
-    # breakpoint()
+initial_box = HPolyhedron(A, b)
+# initial_box = HPolyhedron.MakeBox(np.minimum(mpt, outpt), np.maximum(mpt, outpt))
+certified_regions = dict()
+i = 1
+for s_center in [np.linspace(mpt, outpt, 3)[1]]:#np.linspace(mpt, outpt, 5):
     cert = cspace_free_polytope.BinarySearch(set(),
-                                                    initial_region.A(),
-                                                    initial_region.b(), 
+                                                    initial_box.A(),
+                                                    initial_box.b(), 
                                                     s_center, 
                                                     binary_search_options)
     if cert is not None:
-        certified_regions.update({name: cert.certified_polytope()})
-        visualise_IRIS([cert.certified_polytope(), initial_region], plant, plant_context)
-        SaveIrisRegionsYamlFile(regions_folder+"certified_regions_3.yaml", certified_regions)
-        breakpoint()
-    else:
-        print(f"COULDN'T FIND FOR {name}")
+        visualise_IRIS([cert.certified_polytope(), initial_box], plant, plant_context)
+        # SaveIrisRegionsYamlFile(regions_folder+"certified_regions_4.yaml", {'connector': cert.certified_polytope()})
+    breakpoint()
 
-    end = time.perf_counter()
-    print(end-start)
-    # breakpoint()
+    result = cspace_free_polytope.SearchWithBilinearAlternation(set(),
+                                                                        cert.certified_polytope().A(),
+                                                                        cert.certified_polytope().b(), 
+                                                                        bilinear_alternation_options)
+    if len(result)>0 and result[-1] is not None:
+        new_cert = result[-1]
+        breakpoint()
+        visualise_IRIS([new_cert.certified_polytope(), initial_box], plant, plant_context)
+        certified_regions[f"certified_segment{i}"] = new_cert.certified_polytope()
+        i+=1
+        SaveIrisRegionsYamlFile(regions_folder+"grown_certified_region_3.yaml", certified_regions)
+    else:
+        print(f"COULDN'T FIND FOR {s_center}")
+
+# # ciris_regions = LoadIrisRegionsYamlFile("/home/shrutigarg/drake/ciris-pgd/cirisregions_simplercoll.yaml")
+# # print(ciris_regions)
+# q_low = np.array([-3.094395,-3.094395,-3.094395])
+# q_high = np.array([3.094395,3.094395,3.094395])
+# print("LOWER ", Ratfk.ComputeSValue([ 0.53982789, -1.20966412, -0.28214862], q_star))
+# print("HIGHER ", Ratfk.ComputeSValue([3.094395,3.094395,3.094395], q_star))
+# # regions_to_save = dict()
+# breakpoint()
+# binary_search_region_certificates_for_iris = dict.fromkeys([tuple(name) for name in regions_dict.keys()])
+# # # regions_dummy = [tup[0] for tup in initial_regions]
+# certified_regions = {}
+# for i, (name, initial_region) in enumerate(zip(regions_dict.keys(), regions)):
+#     print("NAME", name)
+#     # initial_region = initial_region.Scale(0.9)
+#     print(f"starting seedpoint {i+1}/{len(regions_dict)}")
+#     start = time.perf_counter()
+#     print(initial_region.MaximumVolumeInscribedEllipsoid().center())
+#     s_center = initial_region.MaximumVolumeInscribedEllipsoid().center()#[ 0.53982789, -1.20966412, -0.28214862]
+#     # if i ==1 or i==5 or i==9:
+#         # visualise_IRIS([initial_region], plant, plant_context)
+#         # breakpoint()
+#         # continue
+#     # breakpoint()
+#     cert = cspace_free_polytope.BinarySearch(set(),
+#                                                     initial_region.A(),
+#                                                     initial_region.b(), 
+#                                                     s_center, 
+#                                                     binary_search_options)
+#     if cert is not None:
+#         certified_regions.update({name: cert.certified_polytope()})
+#         visualise_IRIS([cert.certified_polytope(), initial_region], plant, plant_context)
+#         SaveIrisRegionsYamlFile(regions_folder+"certified_regions_3.yaml", certified_regions)
+#         breakpoint()
+#     else:
+#         print(f"COULDN'T FIND FOR {name}")
+
+#     end = time.perf_counter()
+#     print(end-start)
+#     # breakpoint()

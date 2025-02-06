@@ -7,16 +7,20 @@ from pydrake.all import (
     RationalForwardKinematics, CspaceFreePolytope, SeparatingPlaneOrder,
     RigidTransform, RotationMatrix, Rgba,
     AffineSubspace, MathematicalProgram, Solve,
-    MeshcatVisualizer, StartMeshcat, MeshcatVisualizerParams,
-    PointCloud, RandomGenerator
+    MeshcatVisualizer, StartMeshcat,
+    PointCloud, RandomGenerator, SceneGraphCollisionChecker,
+    RobotDiagramBuilder, MeshcatVisualizerParams,
+    HPolyhedron, AffineBall, IrisInRationalConfigurationSpace
 )
 import numpy as np
 # from pydrake.geometry.optimization_dev import (CspaceFreePolytope, SeparatingPlaneOrder)
 from iris_plant_visualizer import IrisPlantVisualizer
 from pydrake.geometry import Role
-from pydrake.geometry.optimization import IrisOptions, HPolyhedron, Hyperellipsoid, IrisInRationalConfigurationSpace, LoadIrisRegionsYamlFile, SaveIrisRegionsYamlFile
+from pydrake.geometry.optimization import IrisOptions, HPolyhedron, Hyperellipsoid, LoadIrisRegionsYamlFile, SaveIrisRegionsYamlFile
 from pydrake.solvers import MosekSolver, CommonSolverOption, SolverOptions, ScsSolver
 import time
+from pydrake.geometry.optimization import IrisOptions, HPolyhedron, Hyperellipsoid, IrisInRationalConfigurationSpace, LoadIrisRegionsYamlFile, SaveIrisRegionsYamlFile
+
 from pydrake.all import ModelVisualizer
 from util import notebook_plot_connectivity
 
@@ -37,8 +41,11 @@ dk_log = logging.getLogger("drake")
 dk_log.setLevel(logging.DEBUG)
 dk_log.getChild("Snopt").setLevel(logging.INFO)
 
+regions_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/connected_regions.yaml")
+print('All regions have been loaded.')
+regions = list(regions_dict.values())
 
-def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, colors=None):       
+def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, colors=None, tcspace=False):       
     world_frame = plant.world_frame()
     ee_frame = plant.GetFrameByName("iiwa_frame_ee")
 
@@ -67,16 +74,22 @@ def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, col
 
         xyzs = []  # List to hold XYZ positions of configurations in the IRIS region
 
-        rq_sample = region.UniformSample(rng)
-        q_sample = Ratfk.ComputeQValue(rq_sample, q_star)
+        sample = region.UniformSample(rng)
+        if tcspace:
+            q_sample = Ratfk.ComputeQValue(sample, q_star)
+        else:
+            q_sample = sample
 
         plant.SetPositions(plant_context, q_sample)
         xyzs.append(plant.CalcRelativeTransform(plant_context, frame_A=world_frame, frame_B=ee_frame).translation())
 
         for _ in range(num_sample-1):
-            prev_sample = rq_sample
-            rq_sample = region.UniformSample(rng, prev_sample)
-            q_sample = Ratfk.ComputeQValue(rq_sample, q_star)
+            prev_sample = sample
+            sample = region.UniformSample(rng, prev_sample)
+            if tcspace:
+                q_sample = Ratfk.ComputeQValue(sample, q_star)
+            else:
+                q_sample = sample
 
             plant.SetPositions(plant_context, q_sample)
             xyzs.append(plant.CalcRelativeTransform(plant_context, frame_A=world_frame, frame_B=ee_frame).translation())
@@ -86,45 +99,88 @@ def visualise_IRIS(regions, plant, plant_context, seed=42, num_sample=10000, col
         pc = PointCloud(len(xyzs))
         pc.mutable_xyzs()[:] = xyzs.T
         meshcat.SetObject(f"regions/region {i}", pc, point_size=0.025, rgba=colors[i % len(colors)])
+    
+meshcat = StartMeshcat()
 
 #construct our robot
 builder = DiagramBuilder()
 plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
 parser = Parser(plant)
-
 parser.package_map().Add("ciris_pgd", os.path.abspath(''))
 
-directives_file = "/home/sgrg/rlg/SUPERUROP/ciris/models/iiwa14_sphere_collision_complex_scenario.dmd.yaml"
+directives_file = "/home/sgrg/rlg/SUPERUROP/ciris/models/clutter_ciris_scenario.dmd.yaml"
 directives = LoadModelDirectives(directives_file)
-models = ProcessModelDirectives(directives, plant, parser)
+ProcessModelDirectives(directives, plant, parser)
 plant.Finalize()
-meshcat = StartMeshcat()
-visualizer_params = MeshcatVisualizerParams()
-visualizer_params.show_hydroelastic = True
-MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat, visualizer_params)
+
+meshcat_visual_params = MeshcatVisualizerParams()
+meshcat_visual_params.delete_on_initialization_event = False
+meshcat_visual_params.role = Role.kIllustration
+meshcat_visual_params.prefix = "visual"
+meshcat_visual_params.visible_by_default = True
+meshcat_visual = MeshcatVisualizer.AddToBuilder(
+    builder, scene_graph, meshcat, meshcat_visual_params)
+meshcat_collision_params = MeshcatVisualizerParams()
+meshcat_collision_params.delete_on_initialization_event = False
+meshcat_collision_params.role = Role.kProximity
+meshcat_collision_params.prefix = "collision"
+meshcat_collision_params.visible_by_default = False
+meshcat_collision_params.show_hydroelastic = True
+meshcat_collision = MeshcatVisualizer.AddToBuilder(
+    builder, scene_graph, meshcat, meshcat_collision_params)
+
 diagram = builder.Build()
+
 q0 = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+# plant = plant
 context = diagram.CreateDefaultContext()
 plant_context = plant.GetMyContextFromRoot(context)
 plant.SetPositions(plant_context, q0)
 diagram.ForcedPublish(context)
 
 Ratfk = RationalForwardKinematics(plant)
-
-# the point about which we will take the stereographic projections
-# q_star = np.zeros(plant.num_positions())
-q_star = np.array([0.0,0.0,0.0,0.0,0.0,0.0,0.0])
+q_star = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 do_viz = True
 
-# The object we will use to perform our certification.
-cspace_free_polytope = CspaceFreePolytope(plant, scene_graph, SeparatingPlaneOrder.kAffine, q_star)
-
 q_low = np.array([-2.967060,-2.094395,-2.967060,-2.094395,-2.967060,-2.094395,-3.054326])
+tc_low = Ratfk.ComputeSValue(q_low, q_star)
 q_high = np.array([2.967060,2.094395,2.967060,2.094395,2.967060,2.094395,3.054326])
-idx = 0
-# slider_names = 
-meshcat.DeleteAddedControls()
+tc_high = Ratfk.ComputeSValue(q_high, q_star)
+joint_limits = HPolyhedron.MakeBox(tc_low, tc_high)
 
+model = diagram
+robot_model_instances = [plant.GetModelInstanceByName("iiwa")]
+edge_step_size = 0.01
+# collision_checker = SceneGraphCollisionChecker(model=model, robot_model_instances=robot_model_instances, edge_step_size=edge_step_size)
+
+# def grow_region(start_polytope):
+# start_polytope = AffineBall.MinimumVolumeCircumscribedEllipsoid([q0])
+iris_options = IrisOptions()
+iris_options.require_sample_point_is_contained = True
+iris_options.configuration_space_margin = 0.0001
+iris_options.relative_termination_threshold = 0.001
+iris_options.iteration_limit = 3
+
+
+# options = IrisZoOptions.CreateWithArctangentParametrization()
+# options.require_sample_point_is_contained = True
+# options.max_iterations = 1
+# breakpoint()
+
+# collecting seeds
+meshcat.AddButton("Stop")
+meshcat.AddButton("Plot Connectivity")
+meshcat.AddButton("Grow IRIS Region")
+meshcat.AddButton("Lower Bound")
+meshcat.AddButton("Pdb")
+num_clicks_iris, num_clicks_connectivity, num_clicks_pdb, num_clicks_lb = 0, 0, 0, 0
+lb = None
+print("we're set up kind of")
+
+# visualise_IRIS(regions, plant, plant_context, tcspace=True)
+# meshcat.DeleteAddedControls()
+
+idx = 0
 for joint_index in plant.GetJointIndices():
     joint = plant.get_mutable_joint(joint_index)
     if isinstance(joint, RevoluteJoint):
@@ -133,11 +189,8 @@ for joint_index in plant.GetJointIndices():
         meshcat.AddSlider(joint.name(), value=0.0, min=q_low[idx], max=q_high[idx], step=0.01)
         idx += 1
 
-iris_options = IrisOptions()
-iris_options.require_sample_point_is_contained = True
-iris_options.configuration_space_margin = 0.0001
-iris_options.relative_termination_threshold = 0.001
-iris_options.iteration_limit = 10
+q = q0
+eps = 0.001
 
 def in_collision(plant, scene_graph, context, print_collisions=False, thresh=1e-3):
     plant_context = plant.GetMyContextFromRoot(context)
@@ -153,7 +206,7 @@ def in_collision(plant, scene_graph, context, print_collisions=False, thresh=1e-
                   inspector.GetName(inspector.GetFrameId(pair[1])))
     return np.min(dists) < thresh
 
-def grow_region(q, s=False):
+def grow_region(q, iris_options, s=False):
     name = str(q)
     t1 = time.time()
     if s:
@@ -166,26 +219,14 @@ def grow_region(q, s=False):
     print("Region constructed in ~%d seconds." % int(t2 - t1))
     return r
 
-# collecting seeds
-meshcat.AddButton("Stop")
-meshcat.AddButton("Plot Connectivity")
-meshcat.AddButton("Grow IRIS Region")
-meshcat.AddButton("Plot Region")
-meshcat.AddButton("Pdb")
-q = q0
-simple_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/connected_regions.yaml")
-simple_regions = list(simple_dict.values())
+regions_dict = LoadIrisRegionsYamlFile("/home/sgrg/rlg/SUPERUROP/ciris/104/connected_regions.yaml")
+regions = list(regions_dict.values())
 regions = []
-iris_options.configuration_obstacles = [r.Scale(0.8) for r in simple_regions]
+iris_options.configuration_obstacles = [r.Scale(0.8) for r in regions]
 num_clicks_iris, num_clicks_connectivity, num_clicks_pdb = 0, 0, 0
 print("Ready to generate regions")
-
-region = grow_region([0.25404578, -0.38921985, -0.58704933, -0.12338282,  0.15244314, -0.60626391,  8.32308153], s=True)
-visualise_IRIS([region], plant, plant_context)
-simple_region = region.SimplifyByIncrementalFaceTranslation()
-regions.append(region)
-breakpoint() # Can remove to generate new regions
-
+grow = True
+breakpoint()
 while meshcat.GetButtonClicks("Stop") < 1:
     # breakpoint()
     for i in range(len(q)):
@@ -194,23 +235,28 @@ while meshcat.GetButtonClicks("Stop") < 1:
     plant.SetPositions(plant_context, q)
     diagram.ForcedPublish(context)
     if in_collision(plant, scene_graph, context):
-        meshcat.AddButton("We're in Collision! Can't seed")
+        print("We're in Collision! Can't seed")
         grow = False
     else:
-        try:
-            meshcat.DeleteButton("We're in Collision! Can't seed")
-        except:
-            pass
-        grow = True
-    
+        if not grow:
+            grow = True
+            print("********")
+
     if meshcat.GetButtonClicks("Pdb") > num_clicks_pdb:
         num_clicks_pdb = meshcat.GetButtonClicks("Pdb")
         breakpoint()
+    
+    if meshcat.GetButtonClicks("Lower Bound") > num_clicks_lb:
+        num_clicks_lb = meshcat.GetButtonClicks("Lower Bound")
+        lb = q
+        breakpoint()
+
 
     if meshcat.GetButtonClicks("Grow IRIS Region") > num_clicks_iris and grow:
         num_clicks_iris = meshcat.GetButtonClicks("Grow IRIS Region")
-        region = grow_region(q)
-        visualise_IRIS([region], plant, plant_context)
+        region = grow_region(q, iris_options)
+        visualise_IRIS([region], plant, plant_context, tcspace=True)
+        breakpoint()
         simple_region = region.SimplifyByIncrementalFaceTranslation()
         regions.append(region)
         breakpoint() # Can remove to generate new regions
@@ -219,5 +265,7 @@ while meshcat.GetButtonClicks("Stop") < 1:
     if meshcat.GetButtonClicks("Plot Connectivity") > num_clicks_connectivity:
         num_clicks_connectivity = meshcat.GetButtonClicks("Plot Connectivity")
         if len(regions) > 0:
-            notebook_plot_connectivity(regions)
+            notebook_plot_connectivity(regions)    
     time.sleep(0.01)
+
+breakpoint()
